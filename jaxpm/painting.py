@@ -17,7 +17,9 @@ def cic_paint(mesh, positions):
 
   neighboor_coords = floor + connection
   kernel = 1. - jnp.abs(positions - neighboor_coords)
-  kernel = kernel[..., 0] * kernel[..., 1] * kernel[..., 2]  
+  kernel = kernel[..., 0] * kernel[..., 1] * kernel[..., 2] 
+  if weight is not None:
+        kernel = jnp.multiply(jnp.expand_dims(weight, axis=-1), kernel)
 
   neighboor_coords = jnp.mod(neighboor_coords.reshape([-1,8,3]).astype('int32'), jnp.array(mesh.shape))
 
