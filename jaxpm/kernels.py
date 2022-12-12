@@ -109,7 +109,7 @@ def PGD_kernel(kvec, kl, ks):
   kl: float
     initial long range scale parameter
   ks: float
-    initial dhort range scale parameter
+    initial short range scale parameter
   Returns:
   --------
   v: array
@@ -124,3 +124,56 @@ def PGD_kernel(kvec, kl, ks):
   imask = (~(kk == 0)).astype(int)
   v *= imask
   return v
+
+def LDL_kernel(kvec, kl, ks, n):
+    """
+    Computes the LDL kernel as defined in 2010.02926 equation (4)
+    Parameters:
+    -----------
+    kvec: array
+      Array of k values in Fourier space
+    kl: float
+      initial long range scale parameter
+    ks: float
+      initial short range scale parameter
+    n: float
+      index parameter
+    Returns:
+    --------
+    v: array
+      kernel
+    """
+    kk = sum(ki**2 for ki in kvec)
+    kl2 = jax.nn.softplus(kl)**2
+    ks2 = jax.nn.softplus(ks)**2
+    mask = (kk == 0).nonzero()
+    kk[mask] = 1
+    v = jnp.exp(-kl2 / kk) * jnp.exp(-kk / ks2) * kk**n
+    imask = (~(kk == 0)).astype(int)
+    v *= imask
+    return v
+
+def smoothing_kernel(kvec, nsmooth=1.0):
+    """
+    Computes the smooting kernel of LDL loss function, as in 2010.02926 equation (9)
+    Parameters:
+    -----------
+    kvec: array
+      Array of k values in Fourier space
+    nsmooth: float
+      relative weight between large scale and small scales parameters. 
+      n=0.85 recommanded for electron number density. n>0 enhance results on large scales.
+    Returns:
+    --------
+    v: array
+      kernel
+    """
+    kk = sum(ki**2 for ki in kvec)
+    kk = kk ** 0.5
+    mask = (kk == 0).nonzero()
+    kk[mask] = 1
+    v = 1+kk**-nsmooth
+    imask = (~(kk == 0)).astype(int)
+    v *= imask
+    return v
+
