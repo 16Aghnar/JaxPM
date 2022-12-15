@@ -1,5 +1,7 @@
 import numpy as np
+import jax
 import jax.numpy as jnp
+
 
 def fftk(shape, symmetric=True, finite=False, dtype=np.float32):
   """ Return k_vector given a shape (nc, nc, nc) and box_size

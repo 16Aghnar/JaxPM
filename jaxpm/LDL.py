@@ -2,16 +2,18 @@ import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
 from jaxpm.painting import cic_paint, cic_read
-from jaxpm.kernels import fftk, LDL_kernel, smoothing_kernel
+from jaxpm.kernels import fftk, LDL_kernel, smoothing_kernel, gradient_kernel
 
 
-def LDL_displacement_layer(pos, cosmo, params):
+def LDL_displacement_layer(pos, mesh_shape, cosmo, params):
     """
     Computes the LDL displacement layer as defined in 2010.02926 equation (1) and (3)
     Parameters:
     -----------
     pos: array
       Array of particles positions
+    mesh_shape: list
+      shape of the mesh
     cosmo:
       cosmology
     params: list of 5 floats
@@ -43,13 +45,15 @@ def LDL_displacement_layer(pos, cosmo, params):
     
     return dpos_ldl
 
-def LDL_activation_layer(state, params):
+def LDL_activation_layer(state, mesh_shape, params):
     """
     Computes the LDL activation layer as defined in 2010.02926 equation (5)
     Parameters:
     -----------
     state: array
       Array of particles positions
+    mesh_shape: list
+      shape of the mesh
     params: list of 3 floats
       LDL parameters for activation
       b1, b0, mu
@@ -65,13 +69,15 @@ def LDL_activation_layer(state, params):
     # return non linear activation of map
     return jax.nn.relu(b1*(1+delta_2)**mu - b0)
 
-def LDL_prediction(pos, cosmo, params):
+def LDL_prediction(pos, mesh_shape, cosmo, params):
     """
     Computes the LDL displacement layer as defined in 2010.02926 equation (1) and (3)
     Parameters:
     -----------
     pos: array
       Array of particles positions
+    mesh_shape: list
+      shape of the mesh
     cosmo:
       cosmology
     params: list of 13 floats
@@ -79,12 +85,12 @@ def LDL_prediction(pos, cosmo, params):
     Returns:
     --------
     LDL_pred: array
-      displacement
+      emulated baryonic field
     """
     # First displacement layer
-    ldlized_state_1 = pos + LDL_displacement_layer(pos, cosmo, params[:5])
+    ldlized_state_1 = pos + LDL_displacement_layer(pos, mesh_shape, cosmo, params[:5])
     # Second displacement layer
-    ldlized_state_2 = ldlized_state_1 + LDL_displacement_layer(ldlized_state_1, cosmo, params[5:-3])
+    ldlized_state_2 = ldlized_state_1 + LDL_displacement_layer(ldlized_state_1, mesh_shape, cosmo, params[5:-3])
     # Relu layer
-    LDL_pred = LDL_activation_layer(ldlized_state_2, params[-3:])
+    LDL_pred = LDL_activation_layer(ldlized_state_2, mesh_shape, params[-3:])
     return LDL_pred
