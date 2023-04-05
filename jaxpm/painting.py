@@ -4,6 +4,7 @@ import jax.lax as lax
 
 from jaxpm.kernels import fftk, cic_compensation
 
+@jax.jit
 def cic_paint(mesh, positions, weight=None):
   """ Paints positions onto mesh
   mesh: [nx, ny, nz]
