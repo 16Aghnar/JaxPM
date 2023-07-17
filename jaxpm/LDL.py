@@ -64,6 +64,8 @@ def LDL_activation_layer(state, mesh_shape, params):
     """
     # load params
     b1, b0, mu = params
+    #b1 = jax.nn.softplus(b1) #bad idea
+
     # from particules into density map
     delta_2 = cic_paint(jnp.zeros(mesh_shape), state)
     # return non linear activation of map
