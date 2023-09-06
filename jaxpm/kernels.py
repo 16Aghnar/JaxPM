@@ -146,8 +146,8 @@ def LDL_kernel(kvec, kl, ks, n):
       kernel
     """
     kk = sum(ki**2 for ki in kvec)
-    kl2 = jax.nn.softplus(kl)**2
-    ks2 = jax.nn.softplus(ks)**2
+    kl2 = kl**2
+    ks2 = ks**2
     mask = (kk == 0).nonzero()
     kk[mask] = 1
     v = jnp.exp(-kl2 / kk) * jnp.exp(-kk / ks2) * kk**n
