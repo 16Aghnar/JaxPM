@@ -3,6 +3,7 @@ import jax.numpy as jnp
 #import jax_cosmo as jc
 from jaxpm.painting import cic_paint, cic_read
 from jaxpm.kernels import fftk, LDL_kernel, smoothing_kernel, gradient_kernel
+import haiku as hk
 
 
 def LDL_displacement_layer(pos, mesh_shape, params):
@@ -92,3 +93,129 @@ def LDL_prediction(pos, mesh_shape, params):
     # Relu layer
     LDL_pred = LDL_activation_layer(ldlized_state_2, mesh_shape, params[-3:])
     return LDL_pred
+
+def _deBoorVectorized(x, t, c, p):
+    """
+    Evaluates S(x).
+
+    Args
+    ----
+    x: position
+    t: array of knot positions, needs to be padded as described above
+    c: array of control points
+    p: degree of B-spline
+    """
+    k = jnp.digitize(x, t) -1
+    
+    d = [c[j + k - p] for j in range(0, p+1)]
+    for r in range(1, p+1):
+        for j in range(p, r-1, -1):
+            alpha = (x - t[j+k-p]) / (t[j+1+k-r] - t[j+k-p])
+            d[j] = (1.0 - alpha) * d[j-1] + alpha * d[j]
+    return d[p]
+
+
+class NeuralSplineFourierFilter_Activation(hk.Module):
+  """A rotationally invariant filter parameterized by 
+  a b-spline with parameters specified by a small NN."""
+
+  def __init__(self, n_knots=8, latent_size_ns2f=16, latent_size_act=128, name=None):
+    """
+    n_knots: number of control points for the spline  
+    """
+    super().__init__(name=name)
+    self.n_knots = n_knots
+    self.latent_size_ns2f = latent_size_ns2f
+    self.latent_size_act = latent_size_act
+
+  def __call__(self, x, par):
+    """ 
+    x: array, scale, normalized to fftfreq default
+    par: array, cosmo and physical parameters
+    """
+
+    net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.atleast_1d(par)))
+    net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net1))
+    w1 = hk.Linear(self.n_knots+1)(net1) 
+    k1 = hk.Linear(self.n_knots-1)(net1)
+    # make sure the knots sum to 1 and are in the interval 0,1
+    k1 = jnp.concatenate([jnp.zeros((1,)),jnp.cumsum(jax.nn.softmax(k1))])
+    w1 = jnp.concatenate([jnp.zeros((1,)),w1])
+    # Augment with repeating points
+    ak1 = jnp.concatenate([jnp.zeros((3,)), k1, jnp.ones((3,))])
+    
+    net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.atleast_1d(par)))
+    net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net2))
+    w2 = hk.Linear(self.n_knots+1)(net2) 
+    k2 = hk.Linear(self.n_knots-1)(net2)
+    # make sure the knots sum to 1 and are in the interval 0,1
+    k2 = jnp.concatenate([jnp.zeros((1,)),jnp.cumsum(jax.nn.softmax(k2))])
+    w2 = jnp.concatenate([jnp.zeros((1,)),w2])
+    # Augment with repeating points
+    ak2 = jnp.concatenate([jnp.zeros((3,)), k2, jnp.ones((3,))])
+    # 
+    net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(jnp.atleast_1d(par)))
+    net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(net3))
+    actpars = hk.Linear(7)(net3)
+
+    return _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak1, w1, 3), \
+           _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak2, w2, 3), \
+           actpars
+
+def NS2F_displacement(pos, mesh_shape, alpha, gamma, pot_res):
+    """
+    Computes the NS2F particle displacements
+    Parameters:
+    -----------
+    pos: array
+      Array of particles positions
+    mesh_shape: list
+      shape of the mesh
+    alpha : float
+      amplitude of displacement
+    gamma : float
+      power index on the field
+    pot_res: 
+      NS2F filter
+    Returns:
+    --------
+    dpos: array
+      displacement
+    """
+    #generate kvec
+    kvec = fftk(mesh_shape)
+    # turn DM particles into density map
+    delta = cic_paint(jnp.zeros(mesh_shape), pos)
+    # source term, simple power law
+    f_delta = (1+delta)**gamma
+    # in fourier space
+    f_delta_k = jnp.fft.rfftn(f_delta)
+    # apply correction filter
+    pot_k = f_delta_k *(1. + pot_res)
+    # gradient and displacement field
+    forces = jnp.stack([cic_read(jnp.fft.irfftn(gradient_kernel(kvec, i)*pot_k), pos) 
+                      for i in range(3)],axis=-1)
+    # scale of displacement
+    dpos = forces*alpha
+    return dpos
+
+def NS2F_activated(pos, pars, params, a=1.0):
+    """
+    pos is dm particles positions
+    pars is cosmo + physical parameters
+    """
+    delta = cic_paint(jnp.zeros(mesh_shape), pos)
+    kvec = fftk(mesh_shape)
+    # compute a conditioned filter and parameters
+    kk = jnp.sqrt(sum((ki/np.pi)**2 for ki in kvec))
+    pot_res1, pot_res2, actpars = model.apply(params, kk, jnp.atleast_1d(pars))
+    gamma1, alpha1, gamma2, alpha2, b0, b1, mu = actpars
+    
+    # First displacement layer
+    state_1 = pos + NS2F_displacement(pos, mesh_shape, alpha1, gamma1, pot_res1)
+    # Second displacement layer
+    state_2 = state_1 + NS2F_displacement(state_1, mesh_shape, alpha2, gamma2, pot_res2)
+    
+    delta_2 = cic_paint(jnp.zeros(mesh_shape), state_2)
+    # return non linear activation of map
+    return jax.nn.relu(b1*(1+delta_2)**mu - b0) #b1*(1+delta_2)**mu - b0 #j
