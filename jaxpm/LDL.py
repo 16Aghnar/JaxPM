@@ -219,3 +219,24 @@ def NS2F_activated(pos, pars, params, a=1.0):
     delta_2 = cic_paint(jnp.zeros(mesh_shape), state_2)
     # return non linear activation of map
     return jax.nn.relu(b1*(1+delta_2)**mu - b0) #b1*(1+delta_2)**mu - b0 #j
+
+class Cosmo2LDL(hk.Module):
+  """A small NN computing LDL parameters out of inpu cosmo"""
+
+  def __init__(self, n_layers=2, latent_size_mlp=128, name=None):
+    """
+    n_knots: number of control points for the spline  
+    """
+    super().__init__(name=name)
+    self.n_layers = n_layers
+    self.latent_size_mlp = latent_size_mlp
+
+  def __call__(self, par):
+    """ 
+    par: array, cosmo and physical parameters
+    """
+    net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_mlp)(jnp.atleast_1d(par)))
+    net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_mlp)(net2))
+    actpars = hk.Linear(13)(net2)
+
+    return actpars
