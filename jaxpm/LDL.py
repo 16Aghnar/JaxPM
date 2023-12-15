@@ -129,16 +129,12 @@ class NeuralSplineFourierFilter_Activation(hk.Module):
     self.latent_size_ns2f = latent_size_ns2f
     self.latent_size_act = latent_size_act
 
-  def __call__(self, x, par, z):
+  def __call__(self, x, par):
     """ 
     x: array, scale, normalized to fftfreq default
-    par: array, cosmo and physical parameters
+    par: array, cosmo and physical parameters + redshift. shape (7,)
     """
-    #if z is not None:
-    par2 = jnp.concatenate([jnp.atleast_1d(par), jnp.atleast_1d(z)])
-    #else: 
-    #    par2 = jnp.atleast_1d(par)
-    net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.atleast_1d(par2)))
+    net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.atleast_1d(par)))
     net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net1))
     w1 = hk.Linear(self.n_knots+1)(net1) 
     k1 = hk.Linear(self.n_knots-1)(net1)
@@ -148,7 +144,7 @@ class NeuralSplineFourierFilter_Activation(hk.Module):
     # Augment with repeating points
     ak1 = jnp.concatenate([jnp.zeros((3,)), k1, jnp.ones((3,))])
     
-    net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.atleast_1d(par2)))
+    net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.atleast_1d(par)))
     net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net2))
     w2 = hk.Linear(self.n_knots+1)(net2) 
     k2 = hk.Linear(self.n_knots-1)(net2)
@@ -158,7 +154,7 @@ class NeuralSplineFourierFilter_Activation(hk.Module):
     # Augment with repeating points
     ak2 = jnp.concatenate([jnp.zeros((3,)), k2, jnp.ones((3,))])
     # 
-    net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(jnp.atleast_1d(par2)))
+    net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(jnp.atleast_1d(par)))
     net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(net3))
     actpars = hk.Linear(7)(net3)
 
@@ -203,7 +199,7 @@ def NS2F_displacement(pos, mesh_shape, alpha, gamma, pot_res):
     dpos = forces*alpha
     return dpos
 
-def NS2F_activated(pos, mesh_shape, pot_res1, pot_res2, actpars, a=1.0):
+def NS2F_activated(pos, mesh_shape, pot_res1, pot_res2, actpars):
     """
     pos is dm particles positions
     pars is cosmo + physical parameters
