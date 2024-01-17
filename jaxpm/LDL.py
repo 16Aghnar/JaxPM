@@ -162,6 +162,56 @@ class NeuralSplineFourierFilter_Activation(hk.Module):
            _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak2, w2, 3), \
            actpars
 
+class NeuralSplineFourierFilter_Activation_4l(hk.Module):
+  """A rotationally invariant filter parameterized by 
+  a b-spline with parameters specified by a small NN."""
+
+  def __init__(self, n_knots=8, latent_size_ns2f=16, latent_size_act=128, name=None):
+    """
+    n_knots: number of control points for the spline  
+    """
+    super().__init__(name=name)
+    self.n_knots = n_knots
+    self.latent_size_ns2f = latent_size_ns2f
+    self.latent_size_act = latent_size_act
+  
+  def _cosmo_to_knots(self, par):
+    net = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.atleast_1d(par)))
+    net = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net))
+    w = hk.Linear(self.n_knots+1)(net) 
+    k = hk.Linear(self.n_knots-1)(net)
+    # make sure the knots sum to 1 and are in the interval 0,1
+    k = jnp.concatenate([jnp.zeros((1,)),jnp.cumsum(jax.nn.softmax(k))])
+    w = jnp.concatenate([jnp.zeros((1,)),w])
+    # Augment with repeating points
+    ak = jnp.concatenate([jnp.zeros((3,)), k, jnp.ones((3,))])
+    activ = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(jnp.atleast_1d(par)))
+    activ = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(activ))
+    activ = hk.Linear(2)(activ)
+    return ak, w, activ
+
+  def __call__(self, x, par):
+    """ 
+    x: array, scale, normalized to fftfreq default
+    par: array, cosmo and physical parameters + redshift. shape (7,)
+    """
+    # neural splines networks
+    ak1, w1, activ1 = self._cosmo_to_knots(par)
+    ak2, w2, activ2 = self._cosmo_to_knots(par)
+    ak3, w3, activ3 = self._cosmo_to_knots(par)
+    ak4, w4, activ4 = self._cosmo_to_knots(par)
+    # activatioon network
+    net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(jnp.atleast_1d(par)))
+    net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(net3))
+    actpars = hk.Linear(3)(net3)
+
+    return _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak1, w1, 3), \
+           _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak2, w2, 3), \
+           _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak3, w3, 3), \
+           _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak4, w4, 3), \
+           activ1, activ2, activ3, activ4, \
+           actpars
+
 def NS2F_displacement(pos, mesh_shape, alpha, gamma, pot_res):
     """
     Computes the NS2F particle displacements
@@ -217,6 +267,36 @@ def NS2F_activated(pos, mesh_shape, pot_res1, pot_res2, actpars):
     state_2 = state_1 + NS2F_displacement(state_1, mesh_shape, alpha2, gamma2, pot_res2)
     
     delta_2 = cic_paint(jnp.zeros(mesh_shape), state_2)
+    # return non linear activation of map
+    return jax.nn.relu(b1*(1+delta_2)**mu - b0) #b1*(1+delta_2)**mu - b0 #j
+
+def NS2F_activated_4l(pos, mesh_shape, pot_res1, pot_res2, pot_res3, pot_res4,
+                      activ1, activ2, activ3, activ4, actpars):
+    """
+    pos is dm particles positions
+    pars is cosmo + physical parameters
+    """
+    delta = cic_paint(jnp.zeros(mesh_shape), pos)
+    kvec = fftk(mesh_shape)
+    # compute a conditioned filter and parameters
+    kk = jnp.sqrt(sum((ki/np.pi)**2 for ki in fftk(mesh_shape)))
+    
+    gamma1, alpha1 = activ1
+    gamma2, alpha2 = activ2
+    gamma3, alpha3 = activ3
+    gamma4, alpha4 = activ4
+    b0, b1, mu = actpars
+    
+    # First displacement layer
+    state_1 = pos + NS2F_displacement(pos, mesh_shape, alpha1, gamma1, pot_res1)
+    # Second displacement layer
+    state_2 = state_1 + NS2F_displacement(state_1, mesh_shape, alpha2, gamma2, pot_res2)
+    # Second displacement layer
+    state_3 = state_2 + NS2F_displacement(state_2, mesh_shape, alpha3, gamma3, pot_res3)
+    # Second displacement layer
+    state_4 = state_3 + NS2F_displacement(state_3, mesh_shape, alpha4, gamma4, pot_res4)
+    
+    delta_2 = cic_paint(jnp.zeros(mesh_shape), state_4)
     # return non linear activation of map
     return jax.nn.relu(b1*(1+delta_2)**mu - b0) #b1*(1+delta_2)**mu - b0 #j
 
