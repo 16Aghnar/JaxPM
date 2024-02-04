@@ -320,3 +320,39 @@ class Cosmo2LDL(hk.Module):
     actpars = hk.Linear(13)(net2)
 
     return actpars
+
+### Now define a few usual losses for our problem
+
+def loss_simple(prediction, target, nsmooth=1.):
+    """simple loss, pixel-wise norm, with an optional smoothing in Fourier space (default nsmooth=1.)
+    """
+    Diff_pred_targ_k = jnp.fft.rfftn(prediction-target) #/np.median(ne_maps[index])
+    kvec = fftk(mesh_shape)
+    smoothed_diff_k = Diff_pred_targ_k*smoothing_kernel(kvec, nsmooth=nsmooth)
+    return jnp.sum(jnp.linalg.norm(jnp.fft.irfftn(smoothed_diff_k)))
+
+def loss_dmpond_1(prediction, target, DMparts, mesh_shape, nsmooth=1.):
+    """pixel-wise norm, ponderated by DM density, with an optional smoothing in Fourier space (default nsmooth=1.)
+    """
+    Diff_pred_targ_k = jnp.fft.rfftn(prediction - target)
+    kvec = fftk(mesh_shape)
+    smoothed_diff_k = Diff_pred_targ_k*smoothing_kernel(kvec, nsmooth=nsmooth)
+    dmpond = cic_paint(jnp.zeros(mesh_shape), DMparts)
+    return jnp.sum(jnp.linalg.norm(jnp.fft.irfftn(smoothed_diff_k))*dmpond)
+
+def loss_dmpond_2(prediction, target, DMparts, mesh_shape, nsmooth=1.):
+    """pixel-wise norm, ponderated by custom DM density, with an optional smoothing in Fourier space (default nsmooth=1.)
+    """
+    Diff_pred_targ_k = jnp.fft.rfftn(prediction - target)
+    kvec = fftk(mesh_shape)
+    smoothed_diff_k = Diff_pred_targ_k*smoothing_kernel(kvec, nsmooth=nsmooth)
+    dmpond = (1.+cic_paint(jnp.zeros(mesh_shape), DMparts))*0.01
+    return jnp.sum(jnp.linalg.norm(jnp.fft.irfftn(smoothed_diff_k))*dmpond)
+    
+def loss_xray(T_pred, ne_pred, T_targ, ne_targ, nsmooth=1.):
+    """pixel-wise norm in term of ne^2 T^.5, with an optional smoothing in Fourier space (default nsmooth=1.)
+    """
+    Diff_pred_targ_k = jnp.fft.rfftn(T_pred**.5 * ne_pred**2. - T_targ**.5 * ne_targ**2.)
+    kvec = fftk(mesh_shape)
+    smoothed_diff_k = Diff_pred_targ_k*smoothing_kernel(kvec, nsmooth=nsmooth)
+    return jnp.sum(jnp.linalg.norm(jnp.fft.irfftn(smoothed_diff_k)))
