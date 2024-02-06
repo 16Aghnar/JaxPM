@@ -38,6 +38,7 @@ def LDL_displacement_layer(pos, mesh_shape, params):
     LDL_range=LDL_kernel(kvec, kl, ks, n)
     pot_k_ldl=(f_delta_k)*LDL_range  #do f_delta_k * (1+neuralspline apply...). Just 1 layer of displacement.
     # gradient and displacement field
+    #del delta, f_delta, f_delta_k
     forces_ldl= jnp.stack([cic_read(jnp.fft.irfftn(gradient_kernel(kvec, i)*pot_k_ldl), pos) 
                       for i in range(3)],axis=-1)
     # scale of displacement
@@ -322,7 +323,6 @@ class Cosmo2LDL(hk.Module):
     return actpars
 
 ### Now define a few usual losses for our problem
-
 def loss_simple(prediction, target, nsmooth=1.):
     """simple loss, pixel-wise norm, with an optional smoothing in Fourier space (default nsmooth=1.)
     """
@@ -356,3 +356,12 @@ def loss_xray(T_pred, ne_pred, T_targ, ne_targ, nsmooth=1.):
     kvec = fftk(mesh_shape)
     smoothed_diff_k = Diff_pred_targ_k*smoothing_kernel(kvec, nsmooth=nsmooth)
     return jnp.sum(jnp.linalg.norm(jnp.fft.irfftn(smoothed_diff_k)))
+
+def loss_xray_dmpond(T_pred, ne_pred, T_targ, ne_targ, DMparts, mesh_shape, nsmooth=1.):
+    """pixel-wise norm in term of ne^2 T^.5, ponderated by DM density, optional smoothing in Fourier space (default nsmooth=1.)
+    """
+    Diff_pred_targ_k = jnp.fft.rfftn(T_pred**.5 * ne_pred**2. - T_targ**.5 * ne_targ**2.)
+    kvec = fftk(mesh_shape)
+    smoothed_diff_k = Diff_pred_targ_k*smoothing_kernel(kvec, nsmooth=nsmooth)
+    dmpond = cic_paint(jnp.zeros(mesh_shape), DMparts)
+    return jnp.sum(jnp.linalg.norm(jnp.fft.irfftn(smoothed_diff_k))*dmpond)
