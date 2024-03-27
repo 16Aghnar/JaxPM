@@ -7,7 +7,7 @@ from jaxpm.kernels import fftk, LDL_kernel, smoothing_kernel, gradient_kernel
 import haiku as hk
 
 
-def LDL_displacement_layer(pos, mesh_shape, params):
+def LDL_displacement_layer(pos, mesh_shape, params, rho_b_frac=1.):
     """
     Computes the LDL displacement layer as defined in 2010.02926 equation (1) and (3)
     Parameters:
@@ -19,6 +19,8 @@ def LDL_displacement_layer(pos, mesh_shape, params):
     params: list of 5 floats
       LDL parameters for displacement
       alpha, kl, ks, n, gamma
+    rho_b_frac: float
+      the ratio Omega_c0 / Omega_c0_fiduc
     Returns:
     --------
     dpos_ldl: array
@@ -28,6 +30,7 @@ def LDL_displacement_layer(pos, mesh_shape, params):
     kvec = fftk(mesh_shape)
     # turn DM particles into density map
     delta = cic_paint(jnp.zeros(mesh_shape), pos)
+    delta *= rho_b_frac
     # load parameters
     alpha, kl, ks, n, gamma = params
     # source term, simple power law
@@ -72,7 +75,7 @@ def LDL_activation_layer(state, mesh_shape, params):
     # return non linear activation of map
     return jax.nn.relu(b1*(1+delta_2)**mu - b0)
 
-def LDL_prediction(pos, mesh_shape, params):
+def LDL_prediction(pos, mesh_shape, params, rho_b_frac=1.):
     """
     Computes the LDL displacement layer as defined in 2010.02926 equation (1) and (3)
     Parameters:
@@ -89,9 +92,9 @@ def LDL_prediction(pos, mesh_shape, params):
       emulated baryonic field
     """
     # First displacement layer
-    ldlized_state_1 = pos + LDL_displacement_layer(pos, mesh_shape, params[:5])
+    ldlized_state_1 = pos + LDL_displacement_layer(pos, mesh_shape, params[:5], rho_b_frac)
     # Second displacement layer
-    ldlized_state_2 = ldlized_state_1 + LDL_displacement_layer(ldlized_state_1, mesh_shape, params[5:-3])
+    ldlized_state_2 = ldlized_state_1 + LDL_displacement_layer(ldlized_state_1, mesh_shape, params[5:-3], rho_b_frac)
     # Relu layer
     LDL_pred = LDL_activation_layer(ldlized_state_2, mesh_shape, params[-3:])
     return LDL_pred
@@ -163,6 +166,55 @@ class NeuralSplineFourierFilter_Activation(hk.Module):
            _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak2, w2, 3), \
            actpars
 
+class NeuralSplineFourierFilter_biases(hk.Module):
+  """A rotationally invariant filter parameterized by 
+  a b-spline with parameters specified by a small NN."""
+
+  def __init__(self, n_knots=8, latent_size_ns2f=16, latent_size_act=128, name=None):
+    """
+    n_knots: number of control points for the spline  
+    """
+    super().__init__(name=name)
+    self.n_knots = n_knots
+    self.latent_size_ns2f=latent_size_ns2f
+    self.latent_size_act=latent_size_act
+
+  def __call__(self, x):
+    """ 
+    x: array, scale, normalized to fftfreq default
+    par: array, cosmo and physical parameters + redshift. shape (7,)
+    """
+    net1 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
+    #net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.ones((6,))))
+    #net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net1))
+    w1 = hk.Linear(self.n_knots+1)(net1)
+    k1 = hk.Linear(self.n_knots-1)(net1)
+    # make sure the knots sum to 1 and are in the interval 0,1
+    k1 = jnp.concatenate([jnp.zeros((1,)),jnp.cumsum(jax.nn.softmax(k1))])
+    w1 = jnp.concatenate([jnp.zeros((1,)),w1])
+    # Augment with repeating points
+    ak1 = jnp.concatenate([jnp.zeros((3,)), k1, jnp.ones((3,))])
+    
+    net2 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
+    #net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.ones((6,))))
+    #net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net2))
+    w2 = hk.Linear(self.n_knots+1)(net2)
+    k2 = hk.Linear(self.n_knots-1)(net2)
+    # make sure the knots sum to 1 and are in the interval 0,1
+    k2 = jnp.concatenate([jnp.zeros((1,)),jnp.cumsum(jax.nn.softmax(k2))])
+    w2 = jnp.concatenate([jnp.zeros((1,)),w2])
+    # Augment with repeating points
+    ak2 = jnp.concatenate([jnp.zeros((3,)), k2, jnp.ones((3,))])
+    
+    net3 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
+    #net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(jnp.ones((6,))))
+    #net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(net3))
+    actpars = hk.Linear(7)(net3)
+
+    return _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak1, w1, 3), \
+           _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak2, w2, 3), \
+           actpars.squeeze()
+
 class NeuralSplineFourierFilter_Activation_4l(hk.Module):
   """A rotationally invariant filter parameterized by 
   a b-spline with parameters specified by a small NN."""
@@ -213,7 +265,7 @@ class NeuralSplineFourierFilter_Activation_4l(hk.Module):
            activ1, activ2, activ3, activ4, \
            actpars
 
-def NS2F_displacement(pos, mesh_shape, alpha, gamma, pot_res):
+def NS2F_displacement(pos, mesh_shape, alpha, gamma, pot_res, rho_b_frac=1.):
     """
     Computes the NS2F particle displacements
     Parameters:
@@ -237,6 +289,7 @@ def NS2F_displacement(pos, mesh_shape, alpha, gamma, pot_res):
     kvec = fftk(mesh_shape)
     # turn DM particles into density map
     delta = cic_paint(jnp.zeros(mesh_shape), pos)
+    delta *= rho_b_frac
     # source term, simple power law
     f_delta = (1+delta)**gamma
     # in fourier space
@@ -250,32 +303,35 @@ def NS2F_displacement(pos, mesh_shape, alpha, gamma, pot_res):
     dpos = forces*alpha
     return dpos
 
-def NS2F_activated(pos, mesh_shape, pot_res1, pot_res2, actpars):
+def NS2F_activated(pos, mesh_shape, pot_res1, pot_res2, actpars, rho_b_frac=1.):
     """
     pos is dm particles positions
     pars is cosmo + physical parameters
+    rho_b_frac is the ratio Omega_c0 / Omega_c0_fiduc
     """
-    delta = cic_paint(jnp.zeros(mesh_shape), pos)
-    kvec = fftk(mesh_shape)
+    #delta = cic_paint(jnp.zeros(mesh_shape), pos)
+    #rescale by the mean DM bakcground density, relatively to the fiducial (CV) model
+    #kvec = fftk(mesh_shape)
     # compute a conditioned filter and parameters
-    kk = jnp.sqrt(sum((ki/np.pi)**2 for ki in fftk(mesh_shape)))
+    #kk = jnp.sqrt(sum((ki/np.pi)**2 for ki in fftk(mesh_shape)))
     
     gamma1, alpha1, gamma2, alpha2, b0, b1, mu = actpars
     
     # First displacement layer
-    state_1 = pos + NS2F_displacement(pos, mesh_shape, alpha1, gamma1, pot_res1)
+    state_1 = pos + NS2F_displacement(pos, mesh_shape, alpha1, gamma1, pot_res1, rho_b_frac)
     # Second displacement layer
-    state_2 = state_1 + NS2F_displacement(state_1, mesh_shape, alpha2, gamma2, pot_res2)
+    state_2 = state_1 + NS2F_displacement(state_1, mesh_shape, alpha2, gamma2, pot_res2, rho_b_frac)
     
     delta_2 = cic_paint(jnp.zeros(mesh_shape), state_2)
     # return non linear activation of map
     return jax.nn.relu(b1*(1+delta_2)**mu - b0) #b1*(1+delta_2)**mu - b0 #j
 
 def NS2F_activated_4l(pos, mesh_shape, pot_res1, pot_res2, pot_res3, pot_res4,
-                      activ1, activ2, activ3, activ4, actpars):
+                      activ1, activ2, activ3, activ4, actpars, rho_b_frac=1.):
     """
     pos is dm particles positions
     pars is cosmo + physical parameters
+    rho_b_frac is the ratio Omega_c0 / Omega_c0_fiduc
     """
     delta = cic_paint(jnp.zeros(mesh_shape), pos)
     kvec = fftk(mesh_shape)
@@ -323,7 +379,7 @@ class Cosmo2LDL(hk.Module):
     return actpars
 
 ### Now define a few usual losses for our problem
-def loss_simple(prediction, target, nsmooth=1.):
+def loss_simple(prediction, target, mesh_shape, nsmooth=1.):
     """simple loss, pixel-wise norm, with an optional smoothing in Fourier space (default nsmooth=1.)
     """
     Diff_pred_targ_k = jnp.fft.rfftn(prediction-target) #/np.median(ne_maps[index])
@@ -349,7 +405,7 @@ def loss_dmpond_2(prediction, target, DMparts, mesh_shape, nsmooth=1.):
     dmpond = (1.+cic_paint(jnp.zeros(mesh_shape), DMparts))*0.01
     return jnp.sum(jnp.linalg.norm(jnp.fft.irfftn(smoothed_diff_k))*dmpond)
     
-def loss_xray(T_pred, ne_pred, T_targ, ne_targ, nsmooth=1.):
+def loss_xray(T_pred, ne_pred, T_targ, ne_targ, mesh_shape, nsmooth=1.):
     """pixel-wise norm in term of ne^2 T^.5, with an optional smoothing in Fourier space (default nsmooth=1.)
     """
     Diff_pred_targ_k = jnp.fft.rfftn(T_pred**.5 * ne_pred**2. - T_targ**.5 * ne_targ**2.)
