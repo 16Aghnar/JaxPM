@@ -184,9 +184,9 @@ class NeuralSplineFourierFilter_biases(hk.Module):
     x: array, scale, normalized to fftfreq default
     par: array, cosmo and physical parameters + redshift. shape (7,)
     """
-    net1 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
-    #net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.ones((6,))))
-    #net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net1))
+    #net1 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
+    net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.ones((6,))))
+    net1 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net1))
     w1 = hk.Linear(self.n_knots+1)(net1)
     k1 = hk.Linear(self.n_knots-1)(net1)
     # make sure the knots sum to 1 and are in the interval 0,1
@@ -195,9 +195,9 @@ class NeuralSplineFourierFilter_biases(hk.Module):
     # Augment with repeating points
     ak1 = jnp.concatenate([jnp.zeros((3,)), k1, jnp.ones((3,))])
     
-    net2 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
-    #net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.ones((6,))))
-    #net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net2))
+    #net2 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
+    net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(jnp.ones((6,))))
+    net2 = jax.nn.leaky_relu(hk.Linear(self.latent_size_ns2f)(net2))
     w2 = hk.Linear(self.n_knots+1)(net2)
     k2 = hk.Linear(self.n_knots-1)(net2)
     # make sure the knots sum to 1 and are in the interval 0,1
@@ -206,9 +206,9 @@ class NeuralSplineFourierFilter_biases(hk.Module):
     # Augment with repeating points
     ak2 = jnp.concatenate([jnp.zeros((3,)), k2, jnp.ones((3,))])
     
-    net3 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
-    #net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(jnp.ones((6,))))
-    #net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(net3))
+    #net3 = hk.Linear(self.latent_size_ns2f)(jnp.ones((self.latent_size_ns2f,)))
+    net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(jnp.ones((6,))))
+    net3 = jax.nn.leaky_relu(hk.Linear(self.latent_size_act)(net3))
     actpars = hk.Linear(7)(net3)
 
     return _deBoorVectorized(jnp.clip(x/jnp.sqrt(3), 0, 1-1e-4), ak1, w1, 3), \
